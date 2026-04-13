@@ -9,13 +9,15 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@iconify/vue": "^5.0.0",
+    "@tabler/icons-vue": "^3.41.1",
     "@tailwindcss/vite": "^4.2.2",
+    "@tanstack/vue-table": "^8.21.3",
     "@vue-dnd-kit/core": "^2.4.4",
     "@vueuse/core": "^14.2.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-vue-next": "^1.0.0",
+    "reka-ui": "^2.9.5",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.2.2",
     "vue": "^3.5.32"
