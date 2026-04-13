@@ -22,9 +22,8 @@ type TierCard = {
 };
 
 type TierRow = {
-    id?: string;
-    label?: string;
-    default?: boolean;
+    id: string;
+    label: string;
     color: string;
     cards: TierCard[];
 };
@@ -308,7 +307,9 @@ function deleteCardFromPool() {
                     class="tier-row min-w-full"
                 >
                     <div class="tier-label" :style="tierLabelStyle(tier)">
-                        <span class="tier-label__name">{{ tier.label }}</span>
+                        <span class="tier-label__name select-none">{{
+                            tier.label
+                        }}</span>
                     </div>
 
                     <SlickList
@@ -338,7 +339,6 @@ function deleteCardFromPool() {
                         >
                             <article class="tier-card">
                                 <button
-                                    v-if="tier.id === 'pool'"
                                     type="button"
                                     class="pool-delete"
                                     @click.stop="requestDeleteCard(card)"
