@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
+import { SlickItem, SlickList } from "vue-slicksort";
 import { X } from "lucide-vue-next";
 import { Badge } from "@/main/components/ui/badge";
 import { Button } from "@/main/components/ui/button";
@@ -21,8 +22,9 @@ type TierCard = {
 };
 
 type TierRow = {
-    id: string;
-    label: string;
+    id?: string;
+    label?: string;
+    default?: boolean;
     color: string;
     cards: TierCard[];
 };
@@ -34,26 +36,30 @@ type CardState = {
     flexOrder: number;
 };
 
-type DragState = {
-    cardId: string;
-    label: string;
-    pointerId: number;
-    width: number;
-    height: number;
-    x: number;
-    y: number;
-    offsetX: number;
-    offsetY: number;
+type SortStartEvent = {
+    index: number;
 };
+
+type SortEndEvent = {
+    oldIndex: number;
+    newIndex: number;
+};
+
+type SortInsertEvent = {
+    value: TierCard;
+};
+
+const tierGroup = "tiers";
 
 const tiers = ref<TierRow[]>([
     { id: "s", label: "S", color: "#ef4444", cards: [] },
     { id: "a", label: "A", color: "#f97316", cards: [] },
     { id: "b", label: "B", color: "#f59e0b", cards: [] },
     { id: "c", label: "C", color: "#22c55e", cards: [] },
+    { id: "d", label: "D", color: "#176935", cards: [] },
     {
-        id: "pool",
-        label: "Pool",
+        id: "f",
+        label: "F",
         color: "#64748b",
         cards: [
             { id: "card-1", mainIndexName: "IDX-001", label: "Apple" },
@@ -64,9 +70,8 @@ const tiers = ref<TierRow[]>([
     },
 ]);
 
-const draggingCardId = ref<string | null>(null);
-const dragState = ref<DragState | null>(null);
-const dropSlot = ref<{ tierId: string; index: number } | null>(null);
+const draggedCardId = ref<string | null>(null);
+const pendingPrintCardId = ref<string | null>(null);
 const lastMove = ref<CardState | null>(null);
 const isAddCardDialogOpen = ref(false);
 const isDeleteDialogOpen = ref(false);
@@ -95,7 +100,11 @@ const canAddCard = computed(
         newCardMainIndexName.value.trim().length > 0,
 );
 
-const isDragging = computed(() => dragState.value !== null);
+const lastMoveText = computed(() =>
+    lastMove.value
+        ? `${lastMove.value.mainIndexName} / ${lastMove.value.category} / #${lastMove.value.flexOrder}`
+        : "Drag to print state",
+);
 
 watch(isAddCardDialogOpen, (open) => {
     if (!open) {
@@ -110,30 +119,8 @@ watch(isDeleteDialogOpen, (open) => {
     }
 });
 
-onBeforeUnmount(() => {
-    cleanupDrag();
-});
-
-function findTierByCardId(cardId: string) {
-    return tiers.value.find((tier) =>
-        tier.cards.some((card) => card.id === cardId),
-    );
-}
-
-function getCardLocation(cardId: string) {
-    const tier = findTierByCardId(cardId);
-
-    if (!tier) {
-        return null;
-    }
-
-    const index = tier.cards.findIndex((card) => card.id === cardId);
-
-    if (index === -1) {
-        return null;
-    }
-
-    return { tier, index };
+function findTier(tierId: string) {
+    return tiers.value.find((tier) => tier.id === tierId) ?? null;
 }
 
 function findCardState(cardId: string) {
@@ -146,148 +133,66 @@ function printCardState(cardId: string) {
     console.table(cardState.value);
 }
 
-function beginDrag(card: TierCard, event: PointerEvent) {
-    if (event.button !== 0) {
-        return;
-    }
-
-    const location = getCardLocation(card.id);
-    const element = event.currentTarget as HTMLElement | null;
-
-    if (!location || !element) {
-        return;
-    }
-
-    const rect = element.getBoundingClientRect();
-
-    draggingCardId.value = card.id;
-    dragState.value = {
-        cardId: card.id,
-        label: card.label,
-        pointerId: event.pointerId,
-        width: rect.width,
-        height: rect.height,
-        x: rect.left,
-        y: rect.top,
-        offsetX: event.clientX - rect.left,
-        offsetY: event.clientY - rect.top,
+function tierLabelStyle(tier: TierRow) {
+    return {
+        borderColor: tier.color,
+        backgroundColor: `${tier.color}80`,
     };
-    dropSlot.value = {
-        tierId: location.tier.id,
-        index: location.index,
-    };
-
-    document.body.style.userSelect = "none";
-    window.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", onPointerUp);
-    window.addEventListener("pointercancel", onPointerUp);
-    event.preventDefault();
 }
 
-function onPointerMove(event: PointerEvent) {
-    if (!dragState.value || event.pointerId !== dragState.value.pointerId) {
+function flushPendingPrint(nextCards: TierCard[]) {
+    const cardId = pendingPrintCardId.value;
+
+    if (!cardId || !nextCards.some((card) => card.id === cardId)) {
         return;
     }
 
-    dragState.value = {
-        ...dragState.value,
-        x: event.clientX - dragState.value.offsetX,
-        y: event.clientY - dragState.value.offsetY,
-    };
-
-    updateDropSlotFromPointer(event.clientX, event.clientY);
-    event.preventDefault();
+    nextTick(() => {
+        printCardState(cardId);
+        pendingPrintCardId.value = null;
+        draggedCardId.value = null;
+    });
 }
 
-function onPointerUp(event: PointerEvent) {
-    if (!dragState.value || event.pointerId !== dragState.value.pointerId) {
+function updateTierCards(tierId: string, nextCards: TierCard[]) {
+    const tier = findTier(tierId);
+
+    if (!tier) {
         return;
     }
 
-    const nextSlot = dropSlot.value;
-    const cardId = dragState.value.cardId;
-
-    cleanupDrag();
-
-    if (nextSlot) {
-        moveCard(cardId, nextSlot.tierId, nextSlot.index);
-    }
+    tier.cards = nextCards;
+    flushPendingPrint(nextCards);
 }
 
-function cleanupDrag() {
-    window.removeEventListener("pointermove", onPointerMove);
-    window.removeEventListener("pointerup", onPointerUp);
-    window.removeEventListener("pointercancel", onPointerUp);
-    document.body.style.userSelect = "";
-    draggingCardId.value = null;
-    dragState.value = null;
-    dropSlot.value = null;
+function handleSortStart(tierId: string, event: SortStartEvent) {
+    const tier = findTier(tierId);
+
+    draggedCardId.value = tier?.cards[event.index]?.id ?? null;
+    pendingPrintCardId.value = null;
 }
 
-function updateDropSlotFromPointer(clientX: number, clientY: number) {
-    const target = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
-
-    if (!target) {
-        dropSlot.value = null;
+function handleSortEnd(event: SortEndEvent) {
+    if (!draggedCardId.value) {
         return;
     }
 
-    const slot = target.closest<HTMLElement>("[data-drop-slot]");
-
-    if (slot?.dataset.tierId && slot.dataset.index) {
-        dropSlot.value = {
-            tierId: slot.dataset.tierId,
-            index: Number.parseInt(slot.dataset.index, 10),
-        };
+    if (event.oldIndex === event.newIndex) {
+        draggedCardId.value = null;
+        pendingPrintCardId.value = null;
         return;
     }
 
-    const card = target.closest<HTMLElement>("[data-card-id]");
-
-    if (card?.dataset.tierId && card.dataset.index) {
-        const rect = card.getBoundingClientRect();
-        const index = Number.parseInt(card.dataset.index, 10);
-        dropSlot.value = {
-            tierId: card.dataset.tierId,
-            index: clientX < rect.left + rect.width / 2 ? index : index + 1,
-        };
-        return;
-    }
-
-    const track = target.closest<HTMLElement>("[data-tier-track]");
-
-    if (track?.dataset.tierId && track.dataset.count) {
-        dropSlot.value = {
-            tierId: track.dataset.tierId,
-            index: Number.parseInt(track.dataset.count, 10),
-        };
-        return;
-    }
-
-    dropSlot.value = null;
+    pendingPrintCardId.value = draggedCardId.value;
 }
 
-function isActiveSlot(tierId: string, index: number) {
-    return dropSlot.value?.tierId === tierId && dropSlot.value.index === index;
+function handleSortInsert(event: SortInsertEvent) {
+    pendingPrintCardId.value = event.value?.id ?? draggedCardId.value;
 }
 
-function moveCard(cardId: string, targetTierId: string, rawTargetIndex: number) {
-    const source = getCardLocation(cardId);
-    const targetTier = tiers.value.find((tier) => tier.id === targetTierId);
-
-    if (!source || !targetTier) {
-        return;
-    }
-
-    let targetIndex = rawTargetIndex;
-
-    if (source.tier.id === targetTierId && source.index < targetIndex) {
-        targetIndex -= 1;
-    }
-
-    const [card] = source.tier.cards.splice(source.index, 1);
-    targetTier.cards.splice(targetIndex, 0, card);
-    printCardState(card.id);
+function handleSortCancel() {
+    draggedCardId.value = null;
+    pendingPrintCardId.value = null;
 }
 
 function nextCardId() {
@@ -347,207 +252,113 @@ function deleteCardFromPool() {
 </script>
 
 <template>
-    <Dialog v-model:open="isAddCardDialogOpen">
-        <main class="min-h-screen bg-background text-foreground">
-            <div class="mx-auto flex max-w-6xl flex-col gap-2 p-3">
-                <div
-                    class="flex flex-wrap items-center justify-between gap-2 rounded-md border p-3"
-                >
-                    <div class="flex min-w-0 flex-wrap items-center gap-2">
-                        <Badge variant="secondary">Tierlist</Badge>
-                        <Badge variant="outline">{{ cardState.length }}</Badge>
-                        <Badge variant="outline">
-                            {{ poolTier?.cards.length ?? 0 }} pool
-                        </Badge>
-                        <p
-                            v-if="lastMove"
-                            class="truncate text-xs text-muted-foreground"
-                        >
-                            {{ lastMove.mainIndexName }} /
-                            {{ lastMove.category }} /
-                            #{{ lastMove.flexOrder }}
-                        </p>
-                        <p v-else class="text-xs text-muted-foreground">
-                            Drag to print state
-                        </p>
-                    </div>
-
-                    <div class="flex items-center gap-2">
-                        <Button
-                            size="sm"
-                            variant="outline"
-                            @click="$theme.toggle()"
-                        >
-                            Theme
-                        </Button>
-                        <DialogTrigger as-child>
-                            <Button size="sm">Add</Button>
-                        </DialogTrigger>
-                    </div>
+    <main class="page">
+        <div class="shell">
+            <header class="toolbar">
+                <div class="toolbar__meta">
+                    <Badge variant="secondary">Tierlist</Badge>
+                    <Badge variant="outline">{{ cardState.length }}</Badge>
+                    <Badge variant="outline"
+                        >{{ poolTier?.cards.length ?? 0 }} pool</Badge
+                    >
+                    <p class="toolbar__status">{{ lastMoveText }}</p>
                 </div>
 
-                <section class="grid gap-1.5">
-                    <div
-                        v-for="tier in tiers"
-                        :key="tier.id"
-                        class="rounded-md border p-1"
-                        :class="{ 'border-primary/40': dropSlot?.tierId === tier.id }"
-                    >
-                        <div class="flex gap-2">
-                            <div
-                                class="flex h-24 w-24 shrink-0 items-center justify-center rounded-md border text-center"
-                                :style="{
-                                    borderColor: tier.color,
-                                    backgroundColor: `${tier.color}80`,
-                                }"
+                <Dialog v-model:open="isAddCardDialogOpen">
+                    <DialogTrigger as-child>
+                        <Button size="sm">Add</Button>
+                    </DialogTrigger>
+
+                    <DialogContent class="sm:max-w-sm">
+                        <DialogHeader>
+                            <DialogTitle>Add card</DialogTitle>
+                            <DialogDescription
+                                >Add a card to the pool.</DialogDescription
                             >
-                                <span class="text-lg font-semibold leading-none">
-                                    {{ tier.label }}
-                                </span>
-                            </div>
+                        </DialogHeader>
 
-                            <div class="w-full overflow-x-auto rounded-md border bg-muted/15">
-                                <div
-                                    class="tier-track flex h-24 w-max min-w-full items-stretch gap-1.5 p-1.5"
-                                    :class="{ 'is-dragging': isDragging }"
-                                    data-tier-track="true"
-                                    :data-tier-id="tier.id"
-                                    :data-count="tier.cards.length"
+                        <form class="dialog-form" @submit.prevent="addCard">
+                            <Input v-model="newCardLabel" placeholder="Label" />
+                            <Input
+                                v-model="newCardMainIndexName"
+                                placeholder="Main index"
+                            />
+
+                            <DialogFooter class="gap-2 sm:justify-end">
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    @click="isAddCardDialogOpen = false"
                                 >
-                                    <template v-if="isDragging">
-                                        <div
-                                            class="drop-slot"
-                                            :class="{
-                                                active: isActiveSlot(tier.id, 0),
-                                                empty: tier.cards.length === 0,
-                                            }"
-                                            data-drop-slot="true"
-                                            :data-tier-id="tier.id"
-                                            data-index="0"
-                                        >
-                                            <span v-if="isActiveSlot(tier.id, 0)">
-                                                #1
-                                            </span>
-                                        </div>
-                                    </template>
+                                    Cancel
+                                </Button>
+                                <Button type="submit" :disabled="!canAddCard">
+                                    Add
+                                </Button>
+                            </DialogFooter>
+                        </form>
+                    </DialogContent>
+                </Dialog>
+            </header>
 
-                                    <template
-                                        v-for="(card, index) in tier.cards"
-                                        :key="card.id"
-                                    >
-                                        <div
-                                            class="card-tile group relative flex h-full w-24 shrink-0 cursor-grab touch-none select-none items-center justify-center rounded-md border bg-card text-center shadow-none active:cursor-grabbing"
-                                            :class="{
-                                                'opacity-20': draggingCardId === card.id,
-                                            }"
-                                            :data-card-id="card.id"
-                                            :data-tier-id="tier.id"
-                                            :data-index="index"
-                                            @pointerdown="beginDrag(card, $event)"
-                                        >
-                                            <button
-                                                v-if="tier.id === 'pool'"
-                                                type="button"
-                                                class="absolute right-1 top-1 z-10 hidden h-5 w-5 items-center justify-center rounded-sm text-muted-foreground group-hover:flex hover:text-foreground"
-                                                data-delete-button="true"
-                                                @pointerdown.stop.prevent
-                                                @click.stop="requestDeleteCard(card)"
-                                            >
-                                                <X class="size-3" />
-                                                <span class="sr-only">
-                                                    Delete {{ card.label }}
-                                                </span>
-                                            </button>
-
-                                            <span
-                                                class="block w-full truncate px-2 text-center text-sm font-medium"
-                                            >
-                                                {{ card.label }}
-                                            </span>
-                                        </div>
-
-                                        <template v-if="isDragging">
-                                            <div
-                                                class="drop-slot"
-                                                :class="{
-                                                    active: isActiveSlot(
-                                                        tier.id,
-                                                        index + 1,
-                                                    ),
-                                                }"
-                                                data-drop-slot="true"
-                                                :data-tier-id="tier.id"
-                                                :data-index="index + 1"
-                                            >
-                                                <span
-                                                    v-if="
-                                                        isActiveSlot(
-                                                            tier.id,
-                                                            index + 1,
-                                                        )
-                                                    "
-                                                >
-                                                    #{{ index + 2 }}
-                                                </span>
-                                            </div>
-                                        </template>
-                                    </template>
-
-                                    <div
-                                        v-if="tier.cards.length === 0 && !isDragging"
-                                        class="flex h-full min-w-[96px] flex-1 items-center justify-center rounded-md border border-dashed text-[11px] text-muted-foreground"
-                                    >
-                                        Drop here
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </section>
-            </div>
-
-            <div v-if="dragState" class="drag-layer">
+            <section class="board">
                 <div
-                    class="drag-card"
-                    :style="{
-                        width: `${dragState.width}px`,
-                        height: `${dragState.height}px`,
-                        transform: `translate(${dragState.x}px, ${dragState.y}px)`,
-                    }"
+                    v-for="tier in tiers"
+                    :key="tier.id"
+                    class="tier-row min-w-full"
                 >
-                    <span class="block w-full truncate px-2 text-center text-sm font-medium">
-                        {{ dragState.label }}
-                    </span>
-                </div>
-            </div>
-        </main>
+                    <div class="tier-label" :style="tierLabelStyle(tier)">
+                        <span class="tier-label__name">{{ tier.label }}</span>
+                    </div>
 
-        <DialogContent class="sm:max-w-sm">
-            <DialogHeader>
-                <DialogTitle>Add card</DialogTitle>
-                <DialogDescription>Add a card to the pool.</DialogDescription>
-            </DialogHeader>
-
-            <form class="grid gap-3" @submit.prevent="addCard">
-                <Input v-model="newCardLabel" placeholder="Label" />
-                <Input
-                    v-model="newCardMainIndexName"
-                    placeholder="Main index"
-                />
-
-                <DialogFooter class="gap-2 sm:justify-end">
-                    <Button
-                        type="button"
-                        variant="outline"
-                        @click="isAddCardDialogOpen = false"
+                    <SlickList
+                        class="tier-list min-w-full"
+                        :class="{ 'is-empty': tier.cards.length === 0 }"
+                        tag="div"
+                        :list="tier.cards"
+                        :group="tierGroup"
+                        axis="x"
+                        :distance="6"
+                        :transition-duration="180"
+                        :dragged-settling-duration="160"
+                        helper-class="tier-card-helper"
+                        append-to="body"
+                        @sort-start="handleSortStart(tier.id, $event)"
+                        @sort-end="handleSortEnd($event)"
+                        @sort-insert="handleSortInsert($event)"
+                        @sort-cancel="handleSortCancel"
+                        @update:list="updateTierCards(tier.id, $event)"
                     >
-                        Cancel
-                    </Button>
-                    <Button type="submit" :disabled="!canAddCard">Add</Button>
-                </DialogFooter>
-            </form>
-        </DialogContent>
-    </Dialog>
+                        <SlickItem
+                            v-for="(card, index) in tier.cards"
+                            :key="card.id"
+                            :index="index"
+                            class="tier-item"
+                            tag="div"
+                        >
+                            <article class="tier-card">
+                                <button
+                                    v-if="tier.id === 'pool'"
+                                    type="button"
+                                    class="pool-delete"
+                                    @click.stop="requestDeleteCard(card)"
+                                >
+                                    <X class="size-3" />
+                                    <span class="sr-only"
+                                        >Delete {{ card.label }}</span
+                                    >
+                                </button>
+
+                                <span class="tier-card__label">
+                                    {{ card.label }}
+                                </span>
+                            </article>
+                        </SlickItem>
+                    </SlickList>
+                </div>
+            </section>
+        </div>
+    </main>
 
     <Dialog v-model:open="isDeleteDialogOpen">
         <DialogContent class="sm:max-w-sm">
@@ -579,105 +390,244 @@ function deleteCardFromPool() {
 </template>
 
 <style scoped>
-.tier-track {
+.page {
+    min-height: 100vh;
+    background: var(--background);
+    color: var(--foreground);
+}
+
+.shell {
+    width: min(100%, 72rem);
+    margin: 0 auto;
+    padding: 0.75rem;
+    display: grid;
+    gap: 0.5rem;
+}
+
+.toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.625rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: calc(var(--radius) + 2px);
+    background: color-mix(in srgb, var(--background) 92%, var(--muted));
+}
+
+.toolbar__meta {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.toolbar__status {
+    min-width: 0;
+    margin: 0;
+    font-size: 0.75rem;
+    color: var(--muted-foreground);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dialog-form {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.board {
+    display: grid;
+    gap: 0.5rem;
+}
+
+.tier-row {
+    display: grid;
+    grid-template-columns: 5rem minmax(0, 1fr);
+    gap: 0.5rem;
     align-items: stretch;
+    padding: 0.2rem;
+    border: 1px solid var(--border);
+    border-radius: calc(var(--radius) + 2px);
+    background: color-mix(in srgb, var(--background) 94%, var(--muted));
 }
 
-.tier-track.is-dragging .drop-slot {
-    opacity: 0.55;
-}
-
-.drop-slot {
+.tier-label {
     position: relative;
     display: grid;
-    height: 100%;
-    flex: 0 0 14px;
     place-items: center;
-    align-self: stretch;
-    opacity: 0;
-    transition:
-        flex-basis 120ms ease,
-        opacity 120ms ease;
+    min-height: 4.5rem;
+    border: 1px solid var(--border);
+    border-radius: calc(var(--radius) + 1px);
+    text-align: center;
 }
 
-.drop-slot::before {
-    content: "";
-    width: 2px;
-    height: calc(100% - 16px);
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--border) 88%, transparent);
-}
-
-.drop-slot.empty {
-    min-width: 72px;
-    flex-basis: 72px;
-    opacity: 1;
-    border-radius: calc(var(--radius) - 2px);
-    border: 1px dashed var(--border);
-    background: color-mix(in srgb, var(--muted) 50%, var(--background));
-}
-
-.drop-slot.empty::before {
-    display: none;
-}
-
-.drop-slot.active {
-    flex-basis: 24px;
-    opacity: 1;
-}
-
-.drop-slot.active::before {
-    background: var(--primary);
-}
-
-.drop-slot.empty.active {
-    flex-basis: 72px;
-    border-color: color-mix(in srgb, var(--primary) 46%, var(--border));
-    background: color-mix(in srgb, var(--primary) 8%, var(--background));
-}
-
-.drop-slot span {
+.tier-label__count {
     position: absolute;
-    top: 5px;
-    left: 50%;
-    transform: translateX(-50%);
+    top: 0.375rem;
+    right: 0.375rem;
+    min-width: 1.625rem;
+    height: 1.625rem;
+    padding: 0 0.35rem;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-width: 26px;
-    height: 16px;
     border-radius: 999px;
-    border: 1px solid var(--border);
-    background: var(--background);
-    font-size: 10px;
+    background: color-mix(in srgb, var(--background) 82%, var(--muted));
+    font-size: 0.75rem;
     font-weight: 600;
     line-height: 1;
 }
 
-.drag-layer {
-    position: fixed;
-    inset: 0;
-    z-index: 50;
+.tier-label__name {
+    font-size: 1.85rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.tier-list {
+    min-width: 0;
+    min-height: 4.5rem;
+    display: flex;
+    align-items: stretch;
+    gap: 0.5rem;
+    padding: 0.2rem;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border: 1px solid var(--border);
+    border-radius: calc(var(--radius) + 1px);
+    background: color-mix(in srgb, var(--muted) 28%, transparent);
+    scrollbar-width: thin;
+}
+
+.tier-list.is-empty {
+    justify-content: flex-start;
+}
+
+.tier-item {
+    flex: 0 0 auto;
+    display: flex;
+    height: 100%;
+}
+
+.tier-card {
+    position: relative;
+    width: 7.25rem;
+    min-height: 100%;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: color-mix(in srgb, var(--background) 94%, var(--muted));
+    color: var(--foreground);
+    user-select: none;
+    cursor: grab;
+}
+
+.tier-card:active {
+    cursor: grabbing;
+}
+
+.tier-card__label {
+    width: 100%;
+    padding: 0 1.5rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    line-height: 1.1;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.pool-delete {
+    position: absolute;
+    top: 0.25rem;
+    right: 0.25rem;
+    z-index: 1;
+    width: 1.25rem;
+    height: 1.25rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--muted-foreground);
+    opacity: 0;
+    pointer-events: none;
+    transition:
+        opacity 120ms ease,
+        color 120ms ease;
+}
+
+.tier-card:hover .pool-delete,
+.pool-delete:focus-visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.pool-delete:hover {
+    color: var(--foreground);
+}
+
+.tier-empty {
+    flex: 1 0 7.25rem;
+    min-width: 7.25rem;
+    min-height: 3.5rem;
+    display: grid;
+    place-items: center;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+    color: var(--muted-foreground);
+    font-size: 0.75rem;
     pointer-events: none;
 }
 
-.drag-card {
-    position: fixed;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid var(--border);
-    border-radius: calc(var(--radius) - 2px);
-    background: color-mix(in srgb, var(--background) 92%, transparent);
-    box-shadow: 0 12px 32px color-mix(in srgb, black 18%, transparent);
-    opacity: 0.95;
+:global(.tier-card-helper) {
+    z-index: 60;
+    box-shadow: 0 14px 30px color-mix(in srgb, black 16%, transparent);
 }
 
-@media (max-width: 768px) {
-    .drop-slot.empty,
-    .drop-slot.empty.active {
-        min-width: 56px;
-        flex-basis: 56px;
+@media (max-width: 700px) {
+    .shell {
+        padding: 0.5rem;
+    }
+
+    .toolbar {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .toolbar__status {
+        width: 100%;
+    }
+
+    .tier-row {
+        grid-template-columns: 4rem minmax(0, 1fr);
+        gap: 0.375rem;
+        padding: 0.375rem;
+    }
+
+    .tier-label,
+    .tier-list {
+        min-height: 4rem;
+    }
+
+    .tier-label__name {
+        font-size: 1.5rem;
+    }
+
+    .tier-card {
+        width: 6.5rem;
+        min-height: 3.25rem;
+    }
+
+    .tier-empty {
+        min-width: 6.5rem;
+        min-height: 3.25rem;
     }
 }
 </style>
