@@ -27,22 +27,7 @@ const isInBox = computed(() => location.value === "box");
     <main class="page">
         <p class="value">Changed to: {{ location }}</p>
 
-        <div
-            id="start-slot"
-            class="slot start-slot"
-            :class="{ hidden: isInBox }"
-        />
-
-        <div
-            ref="boxRef"
-            class="box"
-            :class="{ over: !!box.isDragOver.value, filled: isInBox }"
-        >
-            <span v-if="!isInBox">Drop here</span>
-            <div id="box-slot" class="slot box-slot" />
-        </div>
-
-        <Teleport :to="isInBox ? '#box-slot' : '#start-slot'">
+        <div v-if="!isInBox" class="start-slot">
             <div
                 ref="cardRef"
                 class="card"
@@ -50,7 +35,18 @@ const isInBox = computed(() => location.value === "box");
             >
                 Card value: {{ location }}
             </div>
-        </Teleport>
+        </div>
+
+        <div
+            ref="boxRef"
+            class="box"
+            :class="{ over: !!box.isDragOver.value, filled: isInBox }"
+        >
+            <span v-if="!isInBox">Drop here</span>
+            <div v-else class="card settled-card">
+                Card value: {{ location }}
+            </div>
+        </div>
     </main>
 </template>
 
@@ -70,17 +66,10 @@ const isInBox = computed(() => location.value === "box");
     color: #475569;
 }
 
-.slot {
-    display: grid;
-    place-items: center;
-}
-
 .start-slot {
     min-height: 56px;
-}
-
-.start-slot.hidden {
-    min-height: 0;
+    display: grid;
+    place-items: center;
 }
 
 .card {
@@ -109,14 +98,13 @@ const isInBox = computed(() => location.value === "box");
     box-sizing: border-box;
 }
 
-.box-slot {
-    width: 100%;
-    min-height: 56px;
-}
-
 .box.over,
 .box.filled {
     background: #dbeafe;
     border-color: #2563eb;
+}
+
+.settled-card {
+    cursor: default;
 }
 </style>
