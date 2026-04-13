@@ -90,7 +90,7 @@ const cardState = computed<CardState[]>(() =>
 );
 
 const poolTier = computed(
-    () => tiers.value.find((tier) => tier.id === "pool") ?? null,
+    () => tiers.value.find((tier) => tier.id === "f") ?? null,
 );
 
 const canAddCard = computed(
@@ -230,6 +230,8 @@ function deleteCardFromPool() {
     if (!deleteTarget.value || !poolTier.value) {
         return;
     }
+
+    console.log(1);
 
     const targetIndex = poolTier.value.cards.findIndex(
         (card) => card.id === deleteTarget.value?.id,
