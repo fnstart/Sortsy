@@ -24,8 +24,10 @@ const isInBox = computed(() => location.value === "box");
 </script>
 
 <template>
-    <main class="page">
+    <main class="page w-full h-full bg-background">
         <p class="value">Changed to: {{ location }}</p>
+
+        <button @click="$theme.toggle()">toggle theme ig</button>
 
         <div v-if="!isInBox" class="start-slot">
             <div
