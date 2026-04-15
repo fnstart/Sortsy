@@ -3,6 +3,7 @@ import "./App.css";
 import { computed, nextTick, ref, watch } from "vue";
 import { SlickItem, SlickList } from "vue-slicksort";
 import { Trash2, SunMoon } from "lucide-vue-next";
+import ImageUpload from "@/main/components/ImageUpload.vue";
 import { Badge } from "@/main/components/ui/badge";
 import { Button } from "@/main/components/ui/button";
 import {
@@ -18,7 +19,8 @@ import { Input } from "@/main/components/ui/input";
 
 type TierCard = {
     id: string;
-    label: string;
+    label?: string;
+    imageUrl?: string;
 };
 
 type TierRow = {
@@ -60,10 +62,10 @@ const tiers = ref<TierRow[]>([
         label: "F",
         labelClass: "tier-label--f",
         cards: [
-            { id: "card-1", label: "Apple" },
-            { id: "card-2", label: "Banana" },
-            { id: "card-3", label: "Cherry" },
-            { id: "card-4", label: "Date" },
+            { id: "7c52ed2f-50f8-4208-80a1-075f34ec6e7f", label: "Apple" },
+            { id: "854d3b4c-2fc8-431d-86a4-d4c3493a1802", label: "Banana" },
+            { id: "77bce6fa-568c-4d83-93b5-68bce85ce838", label: "Cherry" },
+            { id: "c0f9a04d-7a4d-4dbf-b529-2c9af98fa988", label: "Date" },
         ],
     },
 ]);
@@ -75,6 +77,7 @@ const isAddCardDialogOpen = ref(false);
 const isDeleteDialogOpen = ref(false);
 const deleteTarget = ref<TierCard | null>(null);
 const newCardLabel = ref("");
+const newCardImageUrl = ref<string | null>(null);
 
 const cardState = computed<CardState[]>(() =>
     tiers.value.flatMap((tier) =>
@@ -90,11 +93,15 @@ const poolTier = computed(
     () => tiers.value.find((tier) => tier.id === "f") ?? null,
 );
 
-const canAddCard = computed(() => newCardLabel.value.trim().length > 0);
+const canAddCard = computed(
+    () =>
+        newCardLabel.value.trim().length > 0 || newCardImageUrl.value !== null,
+);
 
 watch(isAddCardDialogOpen, (open) => {
     if (!open) {
         newCardLabel.value = "";
+        newCardImageUrl.value = null;
     }
 });
 
@@ -174,26 +181,40 @@ function handleSortCancel() {
     pendingPrintCardId.value = null;
 }
 
-function nextCardId() {
-    const maxId = tiers.value
-        .flatMap((tier) => tier.cards)
-        .map((card) => Number.parseInt(card.id.replace("card-", ""), 10))
-        .filter((value) => Number.isFinite(value))
-        .reduce((max, value) => Math.max(max, value), 0);
+function cardDisplayName(card: TierCard) {
+    return card.label?.trim() || "";
+}
 
-    return `card-${maxId + 1}`;
+function cardAccessibleName(card: TierCard) {
+    return card.label?.trim() || `Card ${card.id}`;
+}
+
+function nextCardId() {
+    return crypto.randomUUID();
+}
+
+function readImageFile(file: File) {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+        newCardImageUrl.value =
+            typeof reader.result === "string" ? reader.result : null;
+    };
+
+    reader.readAsDataURL(file);
 }
 
 function addCard() {
     const label = newCardLabel.value.trim();
 
-    if (!label || !poolTier.value) {
+    if (!canAddCard.value || !poolTier.value) {
         return;
     }
 
     poolTier.value.cards.push({
         id: nextCardId(),
-        label,
+        label: label || undefined,
+        imageUrl: newCardImageUrl.value ?? undefined,
     });
 
     isAddCardDialogOpen.value = false;
@@ -261,6 +282,12 @@ function deleteCardFromPool() {
                         <form class="dialog-form" @submit.prevent="addCard">
                             <Input v-model="newCardLabel" placeholder="Label" />
 
+                            <ImageUpload
+                                :preview-url="newCardImageUrl"
+                                @select="readImageFile"
+                                @clear="newCardImageUrl = null"
+                            />
+
                             <DialogFooter class="gap-2 sm:justify-end">
                                 <Button
                                     type="button"
@@ -317,6 +344,13 @@ function deleteCardFromPool() {
                                 tag="div"
                             >
                                 <div class="tier-card group">
+                                    <img
+                                        v-if="card.imageUrl"
+                                        :src="card.imageUrl"
+                                        :alt="cardAccessibleName(card)"
+                                        draggable="false"
+                                        class="pointer-events-none absolute inset-1 size-[calc(100%-0.5rem)] select-none rounded-md object-cover opacity-55"
+                                    />
                                     <button
                                         type="button"
                                         class="absolute top-1 right-1 z-10 inline-flex size-5 items-center justify-center rounded-full text-destructive opacity-0 pointer-events-none transition-opacity duration-200 group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto"
@@ -327,7 +361,7 @@ function deleteCardFromPool() {
                                     </button>
 
                                     <span class="tier-card__label">
-                                        {{ card.label }}
+                                        {{ cardDisplayName(card) }}
                                     </span>
                                 </div>
                             </SlickItem>
@@ -351,7 +385,7 @@ function deleteCardFromPool() {
                 <DialogDescription>
                     Remove
                     <span class="font-medium text-foreground">
-                        {{ deleteTarget?.label }}
+                        {{ deleteTarget ? cardDisplayName(deleteTarget) : "" }}
                     </span>
                     from the pool.
                 </DialogDescription>
