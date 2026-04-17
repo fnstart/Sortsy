@@ -324,7 +324,7 @@ function deleteCardFromPool() {
                     </div>
 
                     <SlickList
-                        class="tier-list min-w-full"
+                        class="tier-list min-w-full scroll-hidden"
                         :class="{ 'is-empty': tier.cards.length === 0 }"
                         tag="div"
                         :list="tier.cards"
@@ -349,7 +349,14 @@ function deleteCardFromPool() {
                                 class="w-auto h-auto"
                                 tag="div"
                             >
-                                <div class="tier-card group">
+                                <div
+                                    class="group"
+                                    :class="
+                                        card.label && card.label?.length !== 0
+                                            ? 'tier-card'
+                                            : 'tier-card__image'
+                                    "
+                                >
                                     <img
                                         v-if="card.imageUrl"
                                         :src="card.imageUrl"
