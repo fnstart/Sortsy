@@ -182,7 +182,13 @@ function handleSortCancel() {
 }
 
 function cardDisplayName(card: TierCard) {
-    return card.label?.trim() || "";
+    if (card.label && card.label?.length !== 0) {
+        return card.label?.trim();
+    } else if (card.imageUrl !== undefined) {
+        return "Image";
+    } else {
+        return "Unknown";
+    }
 }
 
 function cardAccessibleName(card: TierCard) {
@@ -361,7 +367,7 @@ function deleteCardFromPool() {
                                     </button>
 
                                     <span class="tier-card__label">
-                                        {{ cardDisplayName(card) }}
+                                        {{ card.label }}
                                     </span>
                                 </div>
                             </SlickItem>
@@ -387,7 +393,7 @@ function deleteCardFromPool() {
                     <span class="font-medium text-foreground">
                         {{ deleteTarget ? cardDisplayName(deleteTarget) : "" }}
                     </span>
-                    from the pool.
+                    from the list.
                 </DialogDescription>
             </DialogHeader>
 
